@@ -1,0 +1,93 @@
+from flask import Flask, Response, render_template_string
+import cv2
+import mediapipe as mp
+
+app = Flask(__name__)
+
+# Инициализация моделей MediaPipe для распознавания позы и рук
+mp_pose = mp.solutions.pose
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+pose = mp_pose.Pose()
+hands = mp_hands.Hands()
+
+# Открытие веб-камеры
+cap = cv2.VideoCapture(0)
+
+# Функция для генерации видео потока
+def generate_frames():
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        
+        # Отразить картинку по горизонтали (зеркально)
+        frame = cv2.flip(frame, 1)
+        
+        # Преобразование в RGB для MediaPipe
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Обработка позы
+        pose_results = pose.process(rgb_frame)
+        
+        # Обработка рук
+        hands_results = hands.process(rgb_frame)
+        
+        # Если найдены метки позы, рисуем их на изображении
+        if pose_results.pose_landmarks:
+            mp_drawing.draw_landmarks(frame, pose_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+        
+        # Если найдены метки рук, рисуем их
+        if hands_results.multi_hand_landmarks:
+            for hand_landmarks in hands_results.multi_hand_landmarks:
+                mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+        
+        # Кодируем картинку в формат JPEG
+        _, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
+        
+        # Отправляем картинку как поток
+        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+# Главная страница (отображаем видео)
+@app.route('/')
+def index():
+    return render_template_string("""
+        <!DOCTYPE html>
+        <html lang="ru">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Распознавание позы и рук</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    text-align: center;
+                    margin: 0;
+                    padding: 0;
+                }
+                h1 {
+                    margin-top: 20px;
+                }
+                img {
+                    width: 100%;
+                    max-width: 640px;
+                    margin-top: 20px;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>Живое распознавание позы и рук</h1>
+            <img src="{{ url_for('video') }}" alt="Видео с камеры">
+        </body>
+        </html>
+    """)
+
+# Маршрут для видео потока
+@app.route('/video')
+def video():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# Запуск приложения
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
